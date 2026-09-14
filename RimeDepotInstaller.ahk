@@ -365,7 +365,7 @@ class RimeDepotInstallerOperation {
         }
         opencc := RimeDepotUtil.JoinPath(root, "opencc")
         if DirExist(opencc) {
-            Loop Files, RimeDepotUtil.JoinPath(opencc, "*"), "FR" {
+            Loop Files, RimeDepotUtil.JoinPath(opencc, "*"), "F" {
                 if InStr(FileGetAttrib(A_LoopFileFullPath), "L") {
                     throw RimeDepotSecurityError("Package contains a reparse-point file: " . A_LoopFileName)
                 }

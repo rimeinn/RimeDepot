@@ -254,7 +254,7 @@ class RimeDepotGui extends Gui {
         this.detail_summary := this.AddText("x28 y556 w1020 h24 cGray", "")
         this.detail_schemas := this.AddText("x28 y584 w1020 h22", "Schemas: ")
         this.detail_dependencies := this.AddText("x28 y608 w1020 h22", "Dependencies: ")
-        this.detail_reverse_dependencies := this.AddText("x28 y632 w1020 h22", "Reverse dependencies: ")
+        this.detail_reverse_dependencies := this.AddText("x28 y632 w1020 h22", "Reverse-lookup dependencies: ")
         this.detail_labels := this.AddText("x28 y656 w760 h22", "Labels: ")
         this.detail_license := this.AddText("x802 y656 w236 h22", "License: ")
 
@@ -1086,7 +1086,7 @@ class RimeDepotGui extends Gui {
         this.detail_schemas.Value := "Schemas: " . RimeDepotGuiEntryText(entry, ["schemas", "Schemas"], "(none)")
         this.detail_dependencies.Value := "Dependencies: "
             . RimeDepotGuiEntryText(entry, ["dependencies", "Dependencies"], "(none)")
-        this.detail_reverse_dependencies.Value := "Reverse dependencies: "
+        this.detail_reverse_dependencies.Value := "Reverse-lookup dependencies: "
             . RimeDepotGuiEntryText(
                 entry,
                 ["reverseDependencies", "ReverseDependencies", "reverse_dependencies"],
@@ -1102,7 +1102,7 @@ class RimeDepotGui extends Gui {
         this.detail_summary.Value := ""
         this.detail_schemas.Value := "Schemas: "
         this.detail_dependencies.Value := "Dependencies: "
-        this.detail_reverse_dependencies.Value := "Reverse dependencies: "
+        this.detail_reverse_dependencies.Value := "Reverse-lookup dependencies: "
         this.detail_labels.Value := "Labels: "
         this.detail_license.Value := "License: "
     }

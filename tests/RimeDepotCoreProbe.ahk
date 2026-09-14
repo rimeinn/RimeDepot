@@ -39,6 +39,7 @@ RimeDepotCoreProbeMain() {
     RimeDepotCoreProbeTest("local git --version process", RimeDepotCoreProbeGitVersion.Bind())
     RimeDepotCoreProbeTest("recipe safety", RimeDepotCoreProbeRecipe.Bind())
     RimeDepotCoreProbeTest("recipe apply", RimeDepotCoreProbeRecipeApply.Bind())
+    RimeDepotCoreProbeTest("non-recursive file selection", RimeDepotCoreProbeNonRecursiveFiles.Bind())
     RimeDepotCoreProbeTest("direct owner/repository InstallTarget", RimeDepotCoreProbeInstallTarget.Bind())
     RimeDepotCoreProbeTest("direct target URL/ref contract", RimeDepotCoreProbeDirectTargetContract.Bind())
     RimeDepotCoreProbeTest("catalog installs remain archive-only", RimeDepotCoreProbeCatalogArchiveOnly.Bind())
@@ -404,7 +405,7 @@ RimeDepotCoreProbeSnapshotGate() {
     api_url := "https://api.github.com/repos/rime/rppi/commits?per_page=1"
     sha_one := "0123456789abcdef0123456789abcdef01234567"
     sha_two := "fedcba9876543210fedcba9876543210fedcba98"
-    root_body := '{"entries":{"foo":{"repo":"owner/foo","dependencies":["bar"]},"bar":{"repo":"owner/bar"}},"indexes":["child/index.json"]}'
+    root_body := '{"entries":{"foo":{"repo":"owner/foo","dependencies":["bar"]},"bar":{"repo":"owner/bar","reverseDependencies":["owner/stroke"]}},"indexes":["child/index.json"]}'
     child_body := '{"entries":{"child":{"repo":"owner/child"}}}'
     try {
         transport := RimeDepotCoreProbeSnapshotTransport(Map(
@@ -433,8 +434,9 @@ RimeDepotCoreProbeSnapshotGate() {
             && snapshot["Metadata"]["complete"] = true,
             "Initial normalized catalog snapshot was not committed as a complete eligible generation.")
         entry := service.GetEntry("bar")
-        RimeDepotCoreProbeAssert(entry.ReverseDependencies.Length = 1 && entry.ReverseDependencies[1] = "foo",
-            "Initial catalog reverse dependencies were not derived.")
+        RimeDepotCoreProbeAssert(entry.ReverseDependencies.Length = 1 && entry.ReverseDependencies[1] = "owner/stroke"
+            && service.GetEntry("foo").ReverseDependencies.Length = 0,
+            "RPPI reverse-lookup dependencies were not preserved as metadata.")
 
         second_transport := RimeDepotCoreProbeSnapshotTransport(Map(
             api_url, [RimeDepotHttpResponse(api_url, 304, "", Map("ETag", "api-v1"))]
@@ -448,8 +450,10 @@ RimeDepotCoreProbeSnapshotGate() {
             "Same-SHA LoadCatalog did not use one API probe and zero raw source requests.")
         RimeDepotCoreProbeAssert(second_transport.Calls[1]["Options"]["Headers"]["If-None-Match"] = "api-v1",
             "Commit probe did not send the cached API ETag.")
-        RimeDepotCoreProbeAssert(second_service.GetEntry("bar").ReverseDependencies.Length = 1,
-            "Snapshot restore did not rebuild reverse dependencies.")
+        RimeDepotCoreProbeAssert(second_service.GetEntry("bar").ReverseDependencies.Length = 1
+            && second_service.GetEntry("bar").ReverseDependencies[1] = "owner/stroke"
+            && second_service.GetEntry("foo").ReverseDependencies.Length = 0,
+            "Snapshot restore did not preserve RPPI reverse-lookup dependencies.")
 
         failure_transport := RimeDepotCoreProbeSnapshotTransport(Map(
             api_url, [RimeDepotHttpResponse(api_url, 503, '{"message":"offline"}', Map())]
@@ -876,7 +880,51 @@ RimeDepotCoreProbeRecipeApply() {
             "Recipe Apply did not expand args/defaults in nested patch data.")
         RimeDepotCoreProbeAssert(InStr(patch_text, '"nested"') > 0 && InStr(patch_text, '"files"') > 0,
             "Recipe Apply did not serialize nested mapping/list patch data.")
+        RimeDepotCoreProbeAssert(InStr(patch_text, "`n  {") > 0
+            && InStr(patch_text, "`n    " . Chr(34) . "nested" . Chr(34)) > 0,
+            "Recipe patch data was not indented below __patch.")
         RimeDepotCoreProbeAssert(InStr(patch_text, "__patch:") > 0, "Recipe patch marker was not written.")
+    } finally {
+        if DirExist(root) {
+            RimeDepotUtil.DeleteTree(root)
+        }
+    }
+}
+
+RimeDepotCoreProbeNonRecursiveFiles() {
+    local root, source_root, nested_source, package_root, opencc, nested_opencc, destination_root
+    local files, config, installer, operation, job, top_file, nested_file
+    root := RimeDepotUtil.NormalizePath(A_Temp . "\\RimeDepotCoreProbe-nonrecursive-" . A_TickCount)
+    source_root := RimeDepotUtil.JoinPath(root, "source")
+    nested_source := RimeDepotUtil.JoinPath(source_root, "nested")
+    package_root := RimeDepotUtil.JoinPath(root, "package")
+    opencc := RimeDepotUtil.JoinPath(package_root, "opencc")
+    nested_opencc := RimeDepotUtil.JoinPath(opencc, "nested")
+    destination_root := RimeDepotUtil.JoinPath(root, "destination")
+    try {
+        RimeDepotUtil.EnsureDirectory(nested_source)
+        top_file := RimeDepotUtil.JoinPath(source_root, "top.yaml")
+        nested_file := RimeDepotUtil.JoinPath(nested_source, "nested.yaml")
+        FileAppend("top", top_file)
+        FileAppend("nested", nested_file)
+        files := RimeDepotRecipe.GlobFiles(source_root, "*.yaml")
+        RimeDepotCoreProbeAssert(files.Length = 1 && files[1].Relative = "top.yaml",
+            "Recipe install_files glob still recurses into subdirectories.")
+
+        RimeDepotUtil.EnsureDirectory(nested_opencc)
+        FileAppend("top", RimeDepotUtil.JoinPath(opencc, "top.json"))
+        FileAppend("nested", RimeDepotUtil.JoinPath(nested_opencc, "nested.json"))
+        config := RimeDepotConfig(Map("CachePath", root, "RimeDirectory", RimeDepotUtil.JoinPath(root, "rime")))
+        installer := RimeDepotInstaller(config, 0)
+        job := RimeDepotJob("default-files")
+        operation := RimeDepotInstallerOperation(installer, 0, 0, Map(), job, 0)
+        operation.InstallRoot := destination_root
+        operation._InstallDefault(package_root)
+        RimeDepotCoreProbeAssert(FileExist(RimeDepotUtil.JoinPath(
+                RimeDepotUtil.JoinPath(destination_root, "opencc"), "top.json"))
+            && !FileExist(RimeDepotUtil.JoinPath(
+                RimeDepotUtil.JoinPath(RimeDepotUtil.JoinPath(destination_root, "opencc"), "nested"), "nested.json")),
+            "Default OpenCC installation still recurses into subdirectories.")
     } finally {
         if DirExist(root) {
             RimeDepotUtil.DeleteTree(root)

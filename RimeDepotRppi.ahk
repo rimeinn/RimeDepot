@@ -49,6 +49,9 @@ class RimeDepotCatalog {
             if entry.Recipe = 0 {
                 entry.Recipe := previous.Recipe
             }
+            if entry.ReverseDependencies.Length = 0 {
+                entry.ReverseDependencies := previous.ReverseDependencies
+            }
         }
         this.Entries[key] := entry
         return entry
@@ -89,31 +92,19 @@ class RimeDepotCatalog {
     }
 
     Validate() {
-        states := Map()
-        stack := []
-        reverse := Map()
+        local states := Map(), stack := [], key, entry, dependency, dependency_value
         for key, entry in this.Entries {
             for _, dependency in entry.Dependencies {
                 dependency_value := RimeDepotCatalog.DependencyValue(dependency)
                 if dependency_value = "" {
                     throw RimeDepotCatalogError("Empty dependency in catalog entry '" . entry.Id . "'.")
                 }
-                dependency_entry := this.Resolve(dependency_value)
-                dependency_key := this._Key(dependency_entry.Id)
-                if !reverse.Has(dependency_key) {
-                    reverse[dependency_key] := []
-                }
-                reverse[dependency_key].Push(entry.Id)
+                this.Resolve(dependency_value)
             }
         }
         for key, entry in this.Entries {
             if !states.Has(key) || states[key] = 0 {
                 this._Visit(entry, states, stack)
-            }
-        }
-        for key, entry in this.Entries {
-            if entry.ReverseDependencies.Length = 0 && reverse.Has(key) {
-                entry.ReverseDependencies := reverse[key]
             }
         }
         return this
@@ -149,7 +140,7 @@ class RimeDepotCatalog {
         )
     }
 
-    /** Restore a snapshot and rebuild dependency-derived reverse links. */
+    /** Restore a snapshot while preserving RPPI reverse-lookup metadata. */
     static FromSnapshot(document) {
         local catalog, item, entry
         if !IsObject(document) || !document.Has("entries") || !(document["entries"] is Array) {
@@ -161,9 +152,6 @@ class RimeDepotCatalog {
                 throw RimeDepotCatalogError("Catalog snapshot contains a non-object entry.")
             }
             entry := RimeDepotCatalogEntry(item, RimeDepotUtil.GetString(item, ["id", "Id", "key"], ""))
-            ; Reverse dependencies are derived from the complete set and must
-            ; not be trusted as independently persisted graph state.
-            entry.ReverseDependencies := []
             catalog.Add(entry, entry.Id)
         }
         if document.Has("sources") && document["sources"] is Array {

@@ -181,6 +181,8 @@ class RimeDepotCatalogEntry {
         this.CategoryPath := ""
         this.Schemas := []
         this.Dependencies := []
+        ; RPPI uses this for optional reverse-lookup packages, not the
+        ; inverse of the hard dependency graph.
         this.ReverseDependencies := []
         this.License := ""
         this.Recipe := 0

@@ -314,7 +314,7 @@ class RimeDepotRecipe {
         this.ValidatePattern(pattern)
         pattern := StrReplace(pattern, "/", "\")
         result := []
-        Loop Files, RimeDepotUtil.JoinPath(root, pattern), "FR" {
+        Loop Files, RimeDepotUtil.JoinPath(root, pattern), "F" {
             if InStr(FileGetAttrib(A_LoopFileFullPath), "L") {
                 throw RimeDepotSecurityError("Recipe glob matched a reparse point: " . A_LoopFileName)
             }
@@ -328,7 +328,7 @@ class RimeDepotRecipe {
     }
 
     static PatchText(existing, patch, marker) {
-        patch := RimeDepotRecipe.SerializePatch(patch)
+        patch := RimeDepotRecipe.IndentPatch(RimeDepotRecipe.SerializePatch(patch))
         marker_start := "# Rx: " . marker . " {"
         marker_end := "# }"
         escaped_start := RimeDepotRecipe.EscapeRegex(marker_start)
@@ -340,6 +340,20 @@ class RimeDepotRecipe {
             existing .= "`n"
         }
         return existing . marker_start . "`n" . patch . (SubStr(patch, -1) = "`n" ? "" : "`n") . marker_end . "`n"
+    }
+
+    /** Keep patch data nested below the target file's `__patch` mapping. */
+    static IndentPatch(value) {
+        local result := "", lines, index, line
+        value := StrReplace(StrReplace(String(value), "`r`n", "`n"), "`r", "`n")
+        lines := StrSplit(value, "`n")
+        for index, line in lines {
+            if index > 1 {
+                result .= "`n"
+            }
+            result .= line = "" ? "" : "  " . line
+        }
+        return result
     }
 
     static JoinLines(values) {
