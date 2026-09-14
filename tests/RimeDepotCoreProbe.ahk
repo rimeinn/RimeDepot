@@ -39,6 +39,7 @@ RimeDepotCoreProbeMain() {
     RimeDepotCoreProbeTest("local git --version process", RimeDepotCoreProbeGitVersion.Bind())
     RimeDepotCoreProbeTest("recipe safety", RimeDepotCoreProbeRecipe.Bind())
     RimeDepotCoreProbeTest("recipe apply", RimeDepotCoreProbeRecipeApply.Bind())
+    RimeDepotCoreProbeTest("recipe patch insertion", RimeDepotCoreProbePatchInsertion.Bind())
     RimeDepotCoreProbeTest("non-recursive file selection", RimeDepotCoreProbeNonRecursiveFiles.Bind())
     RimeDepotCoreProbeTest("direct owner/repository InstallTarget", RimeDepotCoreProbeInstallTarget.Bind())
     RimeDepotCoreProbeTest("direct target URL/ref contract", RimeDepotCoreProbeDirectTargetContract.Bind())
@@ -889,6 +890,24 @@ RimeDepotCoreProbeRecipeApply() {
             RimeDepotUtil.DeleteTree(root)
         }
     }
+}
+
+RimeDepotCoreProbePatchInsertion() {
+    local existing, updated, marker_position, node_position, eof_updated
+    existing := "__patch:`n# Rx: demo {`n  old: true`n# }`nsettings:`n  value: true`n"
+    updated := RimeDepotRecipe.PatchText(existing, Map("new", "value"), "demo")
+    marker_position := InStr(updated, "# Rx: demo {")
+    node_position := InStr(updated, "settings:`n")
+    RimeDepotCoreProbeAssert(!InStr(updated, "old: true"),
+        "Recipe patch replacement did not remove the existing marker block.")
+    RimeDepotCoreProbeAssert(marker_position > 0 && marker_position < node_position,
+        "Recipe patch was appended after a subsequent top-level YAML node.")
+    RimeDepotCoreProbeAssert(InStr(updated, "`n  {") > 0,
+        "Recipe patch content was not kept below __patch.")
+
+    eof_updated := RimeDepotRecipe.PatchText("__patch:`n# existing comment`n", "new", "demo")
+    RimeDepotCoreProbeAssert(InStr(eof_updated, "# Rx: demo {") > InStr(eof_updated, "# existing comment"),
+        "Recipe patch was not appended when __patch extended to EOF.")
 }
 
 RimeDepotCoreProbeNonRecursiveFiles() {

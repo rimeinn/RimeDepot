@@ -328,18 +328,82 @@ class RimeDepotRecipe {
     }
 
     static PatchText(existing, patch, marker) {
+        local marker_start, marker_end, patch_start, patch_end, patch_header
+        local line_position, search_position, remove_end, insert_position, scan_position, next_node, prefix, suffix
         patch := RimeDepotRecipe.IndentPatch(RimeDepotRecipe.SerializePatch(patch))
         marker_start := "# Rx: " . marker . " {"
         marker_end := "# }"
-        escaped_start := RimeDepotRecipe.EscapeRegex(marker_start)
-        escaped_end := RimeDepotRecipe.EscapeRegex(marker_end)
-        existing := RegExReplace(existing, "m)^" . escaped_start . "\R.*?^" . escaped_end . "\R?", "")
-        if !RegExMatch(existing, "m)^__patch:\s*$") {
-            existing := RTrim(existing, "`r`n") . "`n__patch:`n"
-        } else if SubStr(existing, -1) != "`n" {
-            existing .= "`n"
+        patch_start := InStr(existing, marker_start)
+        while patch_start {
+            if patch_start = 1 || SubStr(existing, patch_start - 1, 1) = "`n" {
+                line_position := patch_start + StrLen(marker_start)
+                while SubStr(existing, line_position, 1) = " " || SubStr(existing, line_position, 1) = "`t" {
+                    line_position += 1
+                }
+                if SubStr(existing, line_position, 1) = ""
+                    || SubStr(existing, line_position, 1) = "`n"
+                    || (SubStr(existing, line_position, 1) = "`r"
+                        && SubStr(existing, line_position + 1, 1) = "`n") {
+                    break
+                }
+            }
+            patch_start := InStr(existing, marker_start, false, patch_start + 1)
         }
-        return existing . marker_start . "`n" . patch . (SubStr(patch, -1) = "`n" ? "" : "`n") . marker_end . "`n"
+        if patch_start {
+            search_position := patch_start + StrLen(marker_start)
+            patch_end := InStr(existing, marker_end, false, search_position)
+            while patch_end {
+                if patch_end = 1 || SubStr(existing, patch_end - 1, 1) = "`n" {
+                    line_position := patch_end + StrLen(marker_end)
+                    while SubStr(existing, line_position, 1) = " " || SubStr(existing, line_position, 1) = "`t" {
+                        line_position += 1
+                    }
+                    if SubStr(existing, line_position, 1) = ""
+                        || SubStr(existing, line_position, 1) = "`n"
+                        || (SubStr(existing, line_position, 1) = "`r"
+                            && SubStr(existing, line_position + 1, 1) = "`n") {
+                        break
+                    }
+                }
+                patch_end := InStr(existing, marker_end, false, patch_end + 1)
+            }
+            if patch_end {
+                remove_end := patch_end + StrLen(marker_end)
+                while SubStr(existing, remove_end, 1) = " " || SubStr(existing, remove_end, 1) = "`t" {
+                    remove_end += 1
+                }
+                if SubStr(existing, remove_end, 1) = "`r" {
+                    remove_end += 1
+                }
+                if SubStr(existing, remove_end, 1) = "`n" {
+                    remove_end += 1
+                }
+                existing := SubStr(existing, 1, patch_start - 1) . SubStr(existing, remove_end)
+            }
+        }
+        if !RegExMatch(existing, "m)^__patch:[ \t]*(?:\r?$)", &patch_header) {
+            existing := RTrim(existing, "`r`n")
+            if existing != "" {
+                existing .= "`n"
+            }
+            return existing . "__patch:`n" . marker_start . "`n" . patch
+                . (SubStr(patch, -1) = "`n" ? "" : "`n") . marker_end . "`n"
+        }
+        ; Match plum: keep a new patch inside __patch by inserting it before
+        ; the first subsequent top-level YAML node.  If no such node exists,
+        ; the mapping extends to EOF and the patch is appended there.
+        insert_position := StrLen(existing) + 1
+        scan_position := patch_header.Pos + patch_header.Len
+        if RegExMatch(existing, "m)^[^ \t#\r\n]", &next_node, scan_position) {
+            insert_position := next_node.Pos
+        }
+        prefix := SubStr(existing, 1, insert_position - 1)
+        suffix := SubStr(existing, insert_position)
+        if prefix != "" && SubStr(prefix, -1) != "`n" {
+            prefix .= "`n"
+        }
+        return prefix . marker_start . "`n" . patch
+            . (SubStr(patch, -1) = "`n" ? "" : "`n") . marker_end . "`n" . suffix
     }
 
     /** Keep patch data nested below the target file's `__patch` mapping. */
