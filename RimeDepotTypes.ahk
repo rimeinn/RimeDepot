@@ -624,6 +624,57 @@ class RimeDepotUtil {
         return RegExReplace(String(value), "[\\/]+", "\")
     }
 
+    /** Resolve an absolute path and canonicalize its nearest existing ancestor. */
+    static CanonicalPath(value) {
+        local path, name, directory
+        path := RimeDepotUtil._FullPath(RimeDepotUtil.NormalizePath(value))
+        if path = "" || FileExist(path) || DirExist(path) {
+            return RimeDepotUtil._FinalPath(path)
+        }
+        SplitPath(path, &name, &directory)
+        if name = "" || directory = "" || directory = path {
+            return path
+        }
+        directory := RimeDepotUtil.CanonicalPath(directory)
+        return RimeDepotUtil.JoinPath(directory, name)
+    }
+
+    static _FullPath(value) {
+        local capacity := 32768, path_buffer := Buffer(capacity * 2, 0), length
+        if value = "" {
+            return ""
+        }
+        length := DllCall("Kernel32\GetFullPathNameW", "Str", value, "UInt", capacity,
+            "Ptr", path_buffer.Ptr, "Ptr", 0, "UInt")
+        return length > 0 && length < capacity ? StrGet(path_buffer, length, "UTF-16") : value
+    }
+
+    static _FinalPath(value) {
+        local capacity := 32768, path_buffer := Buffer(capacity * 2, 0), handle, length, result
+        if value = "" {
+            return ""
+        }
+        handle := DllCall("Kernel32\CreateFileW", "Str", value, "UInt", 0x80, "UInt", 7,
+            "Ptr", 0, "UInt", 3, "UInt", 0x02000000, "Ptr", 0, "Ptr")
+        if !handle || handle = -1 {
+            return value
+        }
+        try {
+            length := DllCall("Kernel32\GetFinalPathNameByHandleW", "Ptr", handle,
+                "Ptr", path_buffer.Ptr, "UInt", capacity, "UInt", 0, "UInt")
+            if !length || length >= capacity {
+                return value
+            }
+            result := StrGet(path_buffer, length, "UTF-16")
+            if SubStr(result, 1, 8) = "\\?\UNC\" {
+                return "\\" . SubStr(result, 9)
+            }
+            return SubStr(result, 1, 4) = "\\?\" ? SubStr(result, 5) : result
+        } finally {
+            DllCall("Kernel32\CloseHandle", "Ptr", handle)
+        }
+    }
+
     static ExpandEnvironment(value) {
         value := String(value)
         Loop 32 {
@@ -640,8 +691,21 @@ class RimeDepotUtil {
     }
 
     static IsPathInside(root, candidate) {
-        root := RimeDepotUtil.NormalizePath(RTrim(root, "\\"))
-        candidate := RimeDepotUtil.NormalizePath(candidate)
+        root := RTrim(RimeDepotUtil.CanonicalPath(root), "\\")
+        candidate := RimeDepotUtil.CanonicalPath(candidate)
+        return RimeDepotUtil._IsCanonicalPathInside(root, candidate)
+    }
+
+    static RelativePath(root, candidate, error_message := "Path escaped its expected root.") {
+        root := RTrim(RimeDepotUtil.CanonicalPath(root), "\\")
+        candidate := RimeDepotUtil.CanonicalPath(candidate)
+        if !RimeDepotUtil._IsCanonicalPathInside(root, candidate) {
+            throw RimeDepotSecurityError(error_message)
+        }
+        return StrLen(candidate) = StrLen(root) ? "" : SubStr(candidate, StrLen(root) + 2)
+    }
+
+    static _IsCanonicalPathInside(root, candidate) {
         return StrLower(SubStr(candidate, 1, StrLen(root))) = StrLower(root)
             && (StrLen(candidate) = StrLen(root) || SubStr(candidate, StrLen(root) + 1, 1) = "\")
     }

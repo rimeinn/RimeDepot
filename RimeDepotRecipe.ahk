@@ -311,6 +311,7 @@ class RimeDepotRecipe {
     }
 
     static GlobFiles(root, pattern) {
+        local relative, result
         this.ValidatePattern(pattern)
         pattern := StrReplace(pattern, "/", "\")
         result := []
@@ -318,10 +319,8 @@ class RimeDepotRecipe {
             if InStr(FileGetAttrib(A_LoopFileFullPath), "L") {
                 throw RimeDepotSecurityError("Recipe glob matched a reparse point: " . A_LoopFileName)
             }
-            relative := SubStr(A_LoopFileFullPath, StrLen(RTrim(root, "\")) + 2)
-            if !RimeDepotUtil.IsPathInside(root, A_LoopFileFullPath) {
-                throw RimeDepotSecurityError("Recipe glob escaped its staging directory: " . pattern)
-            }
+            relative := RimeDepotUtil.RelativePath(root, A_LoopFileFullPath,
+                "Recipe glob escaped its staging directory: " . pattern)
             result.Push({Absolute: A_LoopFileFullPath, Relative: relative})
         }
         return result

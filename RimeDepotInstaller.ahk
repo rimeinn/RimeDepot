@@ -373,7 +373,8 @@ class RimeDepotInstallerOperation {
                 if extension != "json" && extension != "ocd" && extension != "txt" {
                     continue
                 }
-                relative := SubStr(A_LoopFileFullPath, StrLen(RTrim(root, "\")) + 2)
+                relative := RimeDepotUtil.RelativePath(root, A_LoopFileFullPath,
+                    "Package file escaped its source root.")
                 this._CopyPackageFile(A_LoopFileFullPath, relative)
             }
         }
@@ -392,7 +393,8 @@ class RimeDepotInstallerOperation {
 
     _MarkAllStageFiles() {
         Loop Files, RimeDepotUtil.JoinPath(this.InstallRoot, "*"), "FR" {
-            relative := SubStr(A_LoopFileFullPath, StrLen(RTrim(this.InstallRoot, "\")) + 2)
+            relative := RimeDepotUtil.RelativePath(this.InstallRoot, A_LoopFileFullPath,
+                "Staged install file escaped install staging.")
             this.Changed[RimeDepotUtil.SafeRelativePath(relative)] := true
         }
     }

@@ -26,6 +26,7 @@ RimeDepotCoreProbeMain() {
     RimeDepotCoreProbeTest("target and security", RimeDepotCoreProbeTarget.Bind())
     RimeDepotCoreProbeTest("structured targets and archive URLs", RimeDepotCoreProbeTargetMatrix.Bind())
     RimeDepotCoreProbeTest("safe relative paths and ZIP names", RimeDepotCoreProbeSafeRelativePaths.Bind())
+    RimeDepotCoreProbeTest("short and long path containment", RimeDepotCoreProbePathAliases.Bind())
     RimeDepotCoreProbeTest("config precedence", RimeDepotCoreProbeConfig.Bind())
     RimeDepotCoreProbeTest("GUI settings INI round-trip", RimeDepotCoreProbeGuiSettings.Bind())
     RimeDepotCoreProbeTest("catalog async and cache fallback", RimeDepotCoreProbeCatalog.Bind())
@@ -240,6 +241,52 @@ RimeDepotCoreProbeSafeRelativePaths() {
             try RimeDepotUtil.DeleteTree(root)
         }
     }
+}
+
+RimeDepotCoreProbePathAliases() {
+    local root := RimeDepotUtil.NormalizePath(A_Temp . "\\RimeDepotCoreProbe-path-alias-" . A_TickCount
+        . "-" . DllCall("GetCurrentProcessId", "UInt"))
+    local long_root, short_root, file_path, outside_path, files, relative
+    try {
+        RimeDepotUtil.EnsureDirectory(root)
+        long_root := RimeDepotUtil.CanonicalPath(root)
+        file_path := RimeDepotUtil.JoinPath(long_root, "fixture.txt")
+        FileAppend("fixture", file_path)
+        short_root := RimeDepotCoreProbeShortPath(long_root)
+        if short_root = "" || StrLower(short_root) = StrLower(long_root) {
+            FileAppend("INFO: 8.3 path aliases are unavailable; short-path containment fixture skipped.`n", "*")
+            return
+        }
+        outside_path := RimeDepotUtil.JoinPath(long_root . "-outside", "fixture.txt")
+        RimeDepotCoreProbeAssert(RimeDepotUtil.IsPathInside(short_root, file_path),
+            "A long candidate path was rejected under its short root alias: root=" . short_root
+            . "; canonical root=" . RimeDepotUtil.CanonicalPath(short_root) . "; candidate=" . file_path
+            . "; canonical candidate=" . RimeDepotUtil.CanonicalPath(file_path))
+        RimeDepotCoreProbeAssert(!RimeDepotUtil.IsPathInside(short_root, outside_path),
+            "A sibling path sharing the canonical root prefix was accepted.")
+        relative := RimeDepotUtil.RelativePath(short_root, file_path)
+        RimeDepotCoreProbeAssert(relative = "fixture.txt",
+            "Canonical relative-path calculation retained a short-path alias prefix.")
+        files := RimeDepotRecipe.GlobFiles(short_root, "*.txt")
+        RimeDepotCoreProbeAssert(files.Length = 1 && files[1].Relative = "fixture.txt",
+            "Recipe glob did not preserve a relative path across short and long aliases.")
+    } finally {
+        if DirExist(root) {
+            RimeDepotUtil.DeleteTree(root)
+        }
+    }
+}
+
+RimeDepotCoreProbeShortPath(path) {
+    local required, path_buffer, length
+    required := DllCall("Kernel32\GetShortPathNameW", "Str", path, "Ptr", 0, "UInt", 0, "UInt")
+    if !required {
+        return ""
+    }
+    path_buffer := Buffer(required * 2, 0)
+    length := DllCall("Kernel32\GetShortPathNameW", "Str", path, "Ptr", path_buffer.Ptr,
+        "UInt", required, "UInt")
+    return length > 0 && length < required ? StrGet(path_buffer, length, "UTF-16") : ""
 }
 
 RimeDepotCoreProbeAsciiBytes(value) {
@@ -912,7 +959,7 @@ RimeDepotCoreProbePatchInsertion() {
 
 RimeDepotCoreProbeNonRecursiveFiles() {
     local root, source_root, nested_source, package_root, opencc, nested_opencc, destination_root
-    local files, config, installer, operation, job, top_file, nested_file
+    local files, config, installer, operation, job, top_file, nested_file, package_alias, destination_alias
     root := RimeDepotUtil.NormalizePath(A_Temp . "\\RimeDepotCoreProbe-nonrecursive-" . A_TickCount)
     source_root := RimeDepotUtil.JoinPath(root, "source")
     nested_source := RimeDepotUtil.JoinPath(source_root, "nested")
@@ -937,13 +984,20 @@ RimeDepotCoreProbeNonRecursiveFiles() {
         installer := RimeDepotInstaller(config, 0)
         job := RimeDepotJob("default-files")
         operation := RimeDepotInstallerOperation(installer, 0, 0, Map(), job, 0)
-        operation.InstallRoot := destination_root
-        operation._InstallDefault(package_root)
+        RimeDepotUtil.EnsureDirectory(destination_root)
+        package_alias := RimeDepotCoreProbeShortPath(RimeDepotUtil.CanonicalPath(package_root))
+        destination_alias := RimeDepotCoreProbeShortPath(RimeDepotUtil.CanonicalPath(destination_root))
+        operation.InstallRoot := destination_alias != "" ? destination_alias : destination_root
+        operation._InstallDefault(package_alias != "" ? package_alias : package_root)
         RimeDepotCoreProbeAssert(FileExist(RimeDepotUtil.JoinPath(
                 RimeDepotUtil.JoinPath(destination_root, "opencc"), "top.json"))
             && !FileExist(RimeDepotUtil.JoinPath(
                 RimeDepotUtil.JoinPath(RimeDepotUtil.JoinPath(destination_root, "opencc"), "nested"), "nested.json")),
             "Default OpenCC installation still recurses into subdirectories.")
+        operation.Changed := Map()
+        operation._MarkAllStageFiles()
+        RimeDepotCoreProbeAssert(operation.Changed.Has("opencc\top.json"),
+            "Staged file scanning retained a short-path alias prefix.")
     } finally {
         if DirExist(root) {
             RimeDepotUtil.DeleteTree(root)
