@@ -12,6 +12,8 @@
 
 /** GitHub archive and ZIP extraction helpers. */
 class RimeDepotArchive {
+    static DOWNLOAD_TIMEOUT_MS := 300000
+
     static GitHubArchiveUrl(repo, ref := "", ref_kind := "") {
         repo := String(repo)
         if this.IsExplicitZipUrl(repo) {
@@ -54,11 +56,14 @@ class RimeDepotArchive {
         if ref_kind = "" {
             ref_kind := ref ~= "i)^[0-9a-f]{7,40}$" ? "sha" : "branch"
         }
-        if ref_kind != "branch" && ref_kind != "tag" && ref_kind != "sha" {
+        if ref_kind != "auto" && ref_kind != "branch" && ref_kind != "tag" && ref_kind != "sha" {
             throw RimeDepotTargetError("Unsupported Git ref kind for archive: " . ref_kind)
         }
         RimeDepotUtil.ValidateRef(ref, ref_kind = "sha")
         ref := this.UrlEncodePath(ref)
+        if ref_kind = "auto" {
+            return "https://github.com/" . repo . "/archive/" . ref . ".zip"
+        }
         if ref_kind = "sha" {
             return "https://github.com/" . repo . "/archive/" . ref . ".zip"
         }
@@ -304,7 +309,11 @@ class RimeDepotArchiveOperation {
     }
 
     Start() {
-        options := Map("Binary", true, "Proxy", this.Proxy)
+        options := Map(
+            "Binary", true,
+            "Proxy", this.Proxy,
+            "Timeout", RimeDepotArchive.DOWNLOAD_TIMEOUT_MS
+        )
         try {
             this.DownloadRequest := this.Client.GetAsync(this.ArchiveUrl,
                 ObjBindMethod(this, "_DownloadResponse"), options, this.Job)

@@ -27,13 +27,16 @@ GUI and INI use the same six fields:
 API values override INI values. Git path resolution is API, then INI, then
 `PATH`; only a direct `git.exe` is accepted. The standalone GUI has an RPPI
 catalog mode and a Direct install mode. Direct mode accepts an owner/repository,
-GitHub repository URL, or explicit HTTP(S) `.zip` URL, with default/branch/tag/
-commit-SHA selection and an optional named recipe. An empty recipe selects the
-repository-root `recipe.yaml` automatically. RPPI selections always call the
-archive path, regardless of the direct-install `UseGit` preference. Git
-operations use argument arrays and never invoke a command shell, shell
-evaluation, or recipe commands. Branches, tags, and full commit SHAs are
-supported, including submodules.
+a GitHub repository/tree/commit URL, a GitHub browser or raw recipe URL, or an
+explicit HTTP(S) `.zip` URL. Its optional ref field is used when the source does
+not already identify a ref, or to disambiguate a slash-containing ref in a
+recipe URL. A repository source checks only its root `recipe.yaml`; it does not
+search subdirectories. A recipe URL selects its exact repository-relative path.
+When no root recipe exists, direct installation uses the ordinary data-file
+policy. RPPI selections always call the archive path, regardless of the
+direct-install `UseGit` preference. Git operations use argument arrays and never
+invoke a command shell, shell evaluation, or recipe commands. Branches, tags,
+and commit SHAs are supported.
 
 ## Public API
 
@@ -43,8 +46,14 @@ asynchronous operations:
 - `LoadCatalog`
 - `RefreshCatalog`
 - `InstallEntry`
-- `InstallTarget`
+- `InstallDirect`
 - `Cancel`
+
+Catalog and direct installation intentionally have separate APIs. Direct calls
+accept a locator string or `RimeDepotDirectInstallRequest`; structured requests
+use `locator`, optional `ref`/`ref_kind`, optional `recipe_path`, `transport`
+(`auto`, `archive`, or `git`), and recipe `parameters`. URL and path parsing is
+owned by RimeDepot rather than its host application.
 
 Each operation returns a cancellable job and reports progress, completion, and
 errors through `RimeDepotCallbacks`. HTTP requests, archive extraction, and

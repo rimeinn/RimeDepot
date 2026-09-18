@@ -169,7 +169,7 @@ RimeDepotGuiSmokeSelection() {
 RimeDepotGuiSmokeModes() {
     local service := RimeDepotGuiFakeService(), settings := RimeDepotGuiSettings(Map("UseGit", true))
     local gui := RimeDepotGui(service, settings, A_Temp . "\\RimeDepot-GuiSmoke.ini")
-    local start_time, call, target, options
+    local start_time, call, request
     try {
         AssertEqual("rppi", gui.mode, "The GUI did not start in RPPI mode.")
         gui.mode_selector.Choose(2)
@@ -179,9 +179,7 @@ RimeDepotGuiSmokeModes() {
             "Direct mode did not switch the visible control group.")
 
         gui.direct_source_edit.Value := "https://github.com/owner/direct-repository"
-        gui.direct_ref_kind.Choose(2)
         gui.direct_ref_edit.Value := "feature/direct"
-        gui.direct_recipe_edit.Value := "custom"
         gui.use_git_checkbox.Value := 1
         AssertTrue(gui.InstallSelected(), "The direct install action did not start.")
         start_time := A_TickCount
@@ -190,15 +188,11 @@ RimeDepotGuiSmokeModes() {
         }
         AssertTrue(!gui.busy && service.calls.Length >= 1, "The direct install did not complete.")
         call := service.calls[service.calls.Length]
-        AssertEqual("target", call.kind, "Direct mode called the wrong service operation.")
-        target := call.target
-        options := call.options
-        AssertTrue(target is Map && target["repo"] = "https://github.com/owner/direct-repository"
-            && target["ref_kind"] = "branch" && target["ref"] = "feature/direct"
-            && target["recipe"] = "custom",
-            "Direct mode did not pass the structured target fields.")
-        AssertTrue(options["UseGit"] && options["Proxy"] = gui.proxy_edit.Value,
-            "Direct mode did not pass the explicit Git/proxy options.")
+        AssertEqual("direct", call.kind, "Direct mode called the wrong service operation.")
+        request := call.request
+        AssertTrue(request is Map && request["locator"] = "https://github.com/owner/direct-repository"
+            && request["ref"] = "feature/direct" && request["transport"] = "git",
+            "Direct mode did not pass the direct-install request fields.")
 
         gui.SetMode("rppi")
         AssertEqual("rppi", gui.mode, "The GUI did not return to RPPI mode.")
@@ -219,7 +213,6 @@ RimeDepotGuiSmokeModes() {
         AssertTrue(!gui.busy && service.calls.Length >= 2, "The RPPI install did not complete.")
         call := service.calls[service.calls.Length]
         AssertEqual("entry", call.kind, "RPPI mode called direct target installation.")
-        AssertTrue(!call.options["UseGit"], "RPPI installation did not force archive mode.")
         AssertTrue(InStr(gui.detail_title.Value, "Catalog scheme") > 0,
             "RPPI completion replaced the selected catalog details.")
     } finally {
@@ -432,28 +425,22 @@ RimeDepotGuiSmokeGeometry() {
     local gui := RimeDepotGui(0, RimeDepotGuiSettings(),
         A_Temp . "\\RimeDepot-GuiSmoke-geometry.ini")
     local source, x, y, width, height, direct_height, rppi_height, width_before, width_after
-    local mode_popup_height, category_popup_height, ref_popup_height
-    local mode_closed_height, category_closed_height, ref_closed_height
+    local mode_popup_height, category_popup_height
+    local mode_closed_height, category_closed_height
     try {
         source := FileRead(A_ScriptDir . "\\..\\..\\RimeDepotGui.ahk", "UTF-8")
         AssertTrue(InStr(source, 'AddDropDownList("x110 y146 w210 R2 Choose1"') > 0,
             "Mode DropDownList must use R2 rows.")
         AssertTrue(InStr(source, 'AddDropDownList("x448 y194 w210 R10 Choose1"') > 0,
             "Category DropDownList must use R10 rows.")
-        AssertTrue(InStr(source, '"x78 y250 w180 R4 Choose1"') > 0,
-            "Direct ref-kind DropDownList must use R4 rows.")
-
         AssertTrue(!gui._shown, "Constructing the GUI must not show a window.")
         gui.direct_group.GetPos(&x, &y, &width, &height)
         AssertEqual(184, y, "Direct group moved away from its reserved top position.")
-        AssertTrue(height >= 170, "Direct group is too short for its fields.")
+        AssertTrue(height >= 130, "Direct group is too short for its fields.")
         gui.direct_source_edit.GetPos(&x, &y, &width, &height)
         AssertEqual(210, y, "Direct source field overlaps the group title.")
         gui.direct_ref_edit.GetPos(&x, &y, &width, &height)
         AssertEqual(250, y, "Direct ref field is not below the group title.")
-        gui.direct_recipe_edit.GetPos(&x, &y, &width, &height)
-        AssertEqual(290, y, "Direct recipe field is not below the group title.")
-
         gui.SetMode("direct")
         AssertTrue(!gui._shown, "Changing mode before Show must not show the window.")
         gui.SetMode("rppi")
@@ -477,12 +464,6 @@ RimeDepotGuiSmokeGeometry() {
             "Direct mode did not use its compact hidden window height.")
         gui.GetClientPos(&x, &y, &width_after, &height)
         AssertEqual(width_before, width_after, "Mode switching reset the current window width.")
-        gui.direct_ref_kind.GetPos(&x, &y, &width, &ref_closed_height)
-        ref_popup_height := RimeDepotGuiSmokeDropdownHeight(gui.direct_ref_kind)
-        AssertTrue(ref_popup_height > ref_closed_height && category_popup_height > ref_popup_height
-            && ref_popup_height > mode_popup_height,
-            "Direct ref popup height did not reflect its R4 row option.")
-
         gui.SetMode("rppi")
         gui.GetClientPos(&x, &y, &width, &rppi_height)
         AssertTrue(rppi_height > direct_height && rppi_height >= 700,
@@ -531,8 +512,7 @@ RimeDepotGuiSmokeBusy() {
         AssertTrue(!gui.mode_selector.Enabled && !gui.search_edit.Enabled && !gui.category_filter.Enabled
             && !gui.catalog_list.Enabled && !gui.refresh_button.Enabled,
             "RPPI controls were not disabled while the operation was busy.")
-        AssertTrue(!gui.direct_source_edit.Enabled && !gui.direct_ref_kind.Enabled
-            && !gui.direct_ref_edit.Enabled && !gui.direct_recipe_edit.Enabled,
+        AssertTrue(!gui.direct_source_edit.Enabled && !gui.direct_ref_edit.Enabled,
             "Direct controls were not disabled while the operation was busy.")
         AssertTrue(gui.cancel_button.Enabled, "Cancel must remain enabled while busy.")
         AssertTrue(gui.detail_title.Enabled, "Details text should remain readable while busy.")
@@ -674,25 +654,17 @@ class RimeDepotGuiFakeService {
         return this.LoadCatalog(options, callbacks)
     }
 
-    InstallEntry(entry, options := 0, callbacks := 0) {
-        if !callbacks {
-            callbacks := options
-            options := Map()
-        }
-        this.calls.Push({kind: "entry", entry: entry, options: RimeDepotGuiFakeCopy(options)})
-        return this._Install(callbacks, "entry", entry, options)
+    InstallEntry(entry, callbacks := 0) {
+        this.calls.Push({kind: "entry", entry: entry})
+        return this._Install(callbacks, "entry", entry, Map())
     }
 
-    InstallTarget(target, options := 0, callbacks := 0) {
-        if !callbacks {
-            callbacks := options
-            options := Map()
-        }
+    InstallDirect(request, callbacks := 0) {
         if this.fail_install {
             throw Error("simulated install start failure")
         }
-        this.calls.Push({kind: "target", target: target, options: RimeDepotGuiFakeCopy(options)})
-        return this._Install(callbacks, "target", target, options)
+        this.calls.Push({kind: "direct", request: RimeDepotGuiFakeCopy(request)})
+        return this._Install(callbacks, "direct", request, Map())
     }
 
     _Install(callbacks, kind, target, options) {

@@ -16,6 +16,8 @@
 #Include RimeDepotHttp.ahk
 #Include RimeDepotRppi.ahk
 #Include RimeDepotTarget.ahk
+#Include RimeDepotGithub.ahk
+#Include RimeDepotDirect.ahk
 #Include RimeDepotRecipe.ahk
 #Include RimeDepotArchive.ahk
 #Include RimeDepotGit.ahk

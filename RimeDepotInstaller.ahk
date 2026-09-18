@@ -10,6 +10,7 @@
 #Include RimeDepotTypes.ahk
 #Include RimeDepotConfig.ahk
 #Include RimeDepotRppi.ahk
+#Include RimeDepotDirect.ahk
 #Include RimeDepotRecipe.ahk
 #Include RimeDepotArchive.ahk
 #Include RimeDepotGit.ahk
@@ -22,18 +23,28 @@ class RimeDepotInstaller {
         this.GitClient := git_client
     }
 
-    InstallAsync(target, catalog, options, job, callback) {
-        operation := RimeDepotInstallerOperation(this, target, catalog, options, job, callback)
+    InstallEntryAsync(entry, catalog, job, callback) {
+        operation := RimeDepotInstallerOperation(this, "catalog", entry, catalog, Map(), job, callback)
+        operation.Start()
+        return operation
+    }
+
+    InstallDirectAsync(request, job, callback) {
+        if !(request is RimeDepotDirectInstallRequest) {
+            request := RimeDepotDirectInstallRequest(request)
+        }
+        operation := RimeDepotInstallerOperation(this, "direct", request, RimeDepotCatalog(), Map(), job, callback)
         operation.Start()
         return operation
     }
 }
 
 class RimeDepotInstallerOperation {
-    __New(installer, target, catalog, options, job, callback) {
+    __New(installer, mode, target, catalog, options, job, callback) {
         this.Installer := installer
         this.Config := installer.Config
         this.Client := installer.Client
+        this.Mode := mode
         this.Target := target
         this.Catalog := catalog
         this.Options := IsObject(options) ? options : Map()
@@ -48,6 +59,8 @@ class RimeDepotInstallerOperation {
         this.StageRoot := ""
         this.Changed := Map()
         this.Installed := []
+        this.SelectedRecipePath := ""
+        this.InstallMode := "default"
         this.Done := false
         this._step_timer := ObjBindMethod(this, "_Step")
     }
@@ -79,6 +92,17 @@ class RimeDepotInstallerOperation {
     }
 
     _BuildPlan() {
+        local entry
+        if this.Mode = "direct" {
+            entry := RimeDepotCatalogEntry(Map(
+                "id", this.Target.Repository,
+                "name", this.Target.Repository,
+                "repo", this.Target.Repository,
+                "archiveUrl", this.Target.ArchiveUrl
+            ), this.Target.Repository)
+            this.Plan := [entry]
+            return
+        }
         if !(this.Catalog is RimeDepotCatalog) {
             throw RimeDepotCatalogError("InstallAsync requires a validated RimeDepotCatalog.")
         }
@@ -119,7 +143,11 @@ class RimeDepotInstallerOperation {
             this._Commit()
             this.Done := true
             result := Map("target", this.Target, "entries", this.Installed, "changed", this._ChangedArray(),
-                "stage", this.StageRoot, "catalog", this.Catalog, "warnings", this.Catalog.Warnings)
+                "stage", this.StageRoot, "catalog", this.Catalog, "warnings", this.Catalog.Warnings,
+                "install_mode", this.InstallMode, "recipe_path", this.SelectedRecipePath)
+            if this.Mode = "direct" {
+                result["source"] := this.Target.ToMap()
+            }
             this.Callback.Call(true, result, 0)
             ; Keep no staging data after a successful commit.
             this._Cleanup()
@@ -137,33 +165,25 @@ class RimeDepotInstallerOperation {
         ref := entry.Branch != "" ? entry.Branch : (entry.Tag != "" ? entry.Tag : entry.Sha)
         ref_kind := entry.RefKind != "" ? entry.RefKind
             : (entry.Branch != "" ? "branch" : (entry.Tag != "" ? "tag" : (entry.Sha != "" ? "sha" : "default")))
-        if this.Target is RimeDepotTarget && index = this.Plan.Length {
-            ; A package-id target may resolve through the catalog while still
-            ; carrying a parsed Repo field (for example "Openfly@branch").
-            ; Only an explicitly supplied direct source may replace the
-            ; catalog repository; ref/recipe/parameter overrides remain valid.
-            if this.Target.SourceExplicit && this.Target.Repo != "" {
-                source_repo := this.Target.Repo
-            }
+        if this.Mode = "direct" {
+            source_repo := this.Target.Repository
             if this.Target.ArchiveUrl != "" {
                 archive_url := this.Target.ArchiveUrl
             }
             target_ref := this.Target.Ref
-            if this.Target.SourceExplicit && this.Target.RefKind = "default" {
-                ; A structured direct target with no ref explicitly asks for
-                ; the repository default, even if a matching RPPI entry has a
-                ; catalog-specific branch.
+            if this.Target.RefKind = "default" {
                 ref := ""
                 ref_kind := "default"
             } else if target_ref != "" {
                 ref := target_ref
-                ref_kind := this.Target.RefKind != "" ? this.Target.RefKind
-                    : (this.Target.Sha != "" ? "sha" : (this.Target.Tag != "" ? "tag" : "branch"))
+                ref_kind := this.Target.RefKind
             }
         }
         this.Job.ReportProgress(Map("phase", "install", "state", "fetching", "entry", entry.Id,
             "index", index, "total", this.Plan.Length))
-        use_git := RimeDepotUtil.GetValue(this.Options, ["UseGit", "use_git"], this.Config.UseGit)
+        use_git := this.Mode = "direct"
+            ? (this.Target.Transport = "git" || (this.Target.Transport = "auto" && this.Config.UseGit))
+            : false
         if use_git {
             if RimeDepotArchive.IsExplicitZipUrl(archive_url) || RimeDepotArchive.IsExplicitZipUrl(source_repo) {
                 throw RimeDepotUnsupportedError(
@@ -239,12 +259,13 @@ class RimeDepotInstallerOperation {
         if !this._ConfigFilesAllowed(root) {
             throw RimeDepotUnsupportedError("HTTP package contains .gitmodules; enable Git to install submodules.")
         }
-        recipe := this._SelectRecipe(entry, index, root)
+        recipe := this._SelectRecipe(entry, root)
         if recipe {
+            this.InstallMode := "recipe"
             this._SeedPatchFiles(recipe)
             this.Job.ReportProgress(Map("phase", "install", "state", "recipe", "entry", entry.Id))
             this.CurrentRequest := recipe.ApplyAsync(this.Client, root, this.InstallRoot,
-                this._RecipeParameters(entry, index), this.Job, ObjBindMethod(this, "_RecipeDone", entry, index))
+                this._RecipeParameters(entry), this.Job, ObjBindMethod(this, "_RecipeDone", entry, index))
             return
         }
         this._InstallDefault(root)
@@ -272,27 +293,35 @@ class RimeDepotInstallerOperation {
         SetTimer(this._step_timer, -1)
     }
 
-    _SelectRecipe(entry, index, root) {
-        recipe_name := ""
-        if this.Target is RimeDepotTarget && index = this.Plan.Length {
-            recipe_name := this.Target.Recipe
-        }
-        if recipe_name != "" && !RimeDepotUtil.IsSafeKey(recipe_name) {
-            throw RimeDepotSecurityError("Unsafe recipe name: " . recipe_name)
-        }
-        value := recipe_name != "" ? RimeDepotInstaller.RecipeValue(entry, recipe_name) : entry.Recipe
-        if value {
-            return value is RimeDepotRecipe ? value : RimeDepotRecipe.Parse(value, recipe_name)
-        }
-        if recipe_name != "" {
-            path := RimeDepotUtil.JoinPath(root, recipe_name . ".recipe.yaml")
-            if !FileExist(path) {
-                throw RimeDepotCatalogError("Requested recipe was not found: " . recipe_name)
+    _SelectRecipe(entry, root) {
+        local recipe_path, recipe_id, recipe, value
+        if this.Mode = "direct" && this.Target.RecipePath != "" {
+            recipe_path := RimeDepotGithubLocator.ValidateRecipePath(this.Target.RecipePath)
+            path := RimeDepotUtil.JoinPath(root, recipe_path)
+            if !RimeDepotUtil.IsPathInside(root, path) {
+                throw RimeDepotSecurityError("Recipe path escaped its package root: " . recipe_path)
             }
-            return RimeDepotRecipe.Parse(FileRead(path, "UTF-8"), recipe_name)
+            if !FileExist(path) {
+                throw RimeDepotCatalogError("Requested recipe was not found: " . recipe_path)
+            }
+            recipe_id := RimeDepotGithubLocator.RecipeId(recipe_path)
+            recipe := RimeDepotRecipe.Parse(FileRead(path, "UTF-8"), recipe_id)
+            if recipe_id != "" && recipe.Rx != "" && recipe.Rx != recipe_id {
+                throw RimeDepotCatalogError(
+                    "Recipe Rx '" . recipe.Rx . "' does not match its path identifier '" . recipe_id . "'."
+                )
+            }
+            this.SelectedRecipePath := recipe_path
+            return recipe
+        }
+        value := this.Mode = "catalog" ? entry.Recipe : 0
+        if value {
+            this.SelectedRecipePath := "(catalog)"
+            return value is RimeDepotRecipe ? value : RimeDepotRecipe.Parse(value, "")
         }
         recipe_path := RimeDepotUtil.JoinPath(root, "recipe.yaml")
         if FileExist(recipe_path) {
+            this.SelectedRecipePath := "recipe.yaml"
             return RimeDepotRecipe.Parse(FileRead(recipe_path, "UTF-8"), "")
         }
         return 0
@@ -308,7 +337,7 @@ class RimeDepotInstallerOperation {
         return 0
     }
 
-    _RecipeParameters(entry, index) {
+    _RecipeParameters(entry) {
         result := Map()
         if entry.Recipe is Map {
             params := RimeDepotUtil.GetValue(entry.Recipe, ["parameters", "options"], 0)
@@ -318,14 +347,9 @@ class RimeDepotInstallerOperation {
                 }
             }
         }
-        if this.Target is RimeDepotTarget && index = this.Plan.Length {
+        if this.Mode = "direct" {
             for key, value in this.Target.Parameters {
                 result[key] := value
-            }
-        }
-        for key, value in this.Options {
-            if RegExMatch(String(key), "i)^recipe_[A-Za-z_][A-Za-z0-9_.-]*$") {
-                result[SubStr(String(key), 8)] := value
             }
         }
         return result

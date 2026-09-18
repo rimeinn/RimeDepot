@@ -258,28 +258,19 @@ class RimeDepotGui extends Gui {
         this.detail_labels := this.AddText("x28 y656 w760 h22", "Labels: ")
         this.detail_license := this.AddText("x802 y656 w236 h22", "License: ")
 
-        this.direct_group := this.AddGroupBox("x12 y184 w1056 h176", "Direct source")
+        this.direct_group := this.AddGroupBox("x12 y184 w1056 h136", "Direct source")
         this.direct_source_label := this.AddText("x22 y214 w54 h24 +0x200", "Source")
         this.direct_source_edit := this.AddEdit("x78 y210 w780 h26")
         this.direct_source_edit.OnEvent("Change", this.OnDirectInputChanged.Bind(this))
-        this.direct_ref_kind_label := this.AddText("x22 y254 w54 h24 +0x200", "Ref kind")
-        this.direct_ref_kind := this.AddDropDownList(
-            "x78 y250 w180 R4 Choose1", ["Default", "Branch", "Tag", "Commit SHA"]
+        this.direct_ref_label := this.AddText("x22 y254 w54 h24 +0x200", "Ref")
+        this.direct_ref_edit := this.AddEdit("x78 y250 w780 h26")
+        this.direct_hint := this.AddText(
+            "x22 y282 w1034 h24 cGray",
+            "Paste a GitHub repository or recipe URL. Ref is optional; repository installs check only root recipe.yaml."
         )
-        this.direct_ref_label := this.AddText("x270 y254 w54 h24 +0x200", "Ref")
-        this.direct_ref_edit := this.AddEdit("x330 y250 w528 h26")
-        this.direct_recipe_label := this.AddText("x22 y294 w54 h24 +0x200", "Recipe")
-        this.direct_recipe_edit := this.AddEdit("x78 y290 w780 h26")
-        this.direct_recipe_hint := this.AddText(
-            "x22 y322 w1034 h24 cGray", "Leave Recipe empty to use the repository root recipe.yaml automatically."
-        )
-        ; Keep both names available to small hosts and hidden GUI tests: the
-        ; field is a repository source, which may also be an explicit .zip URL.
         this.direct_repo_edit := this.direct_source_edit
         this.direct_source := this.direct_source_edit
         this.direct_ref := this.direct_ref_edit
-        this.direct_recipe := this.direct_recipe_edit
-        this.direct_ref_kind_dropdown := this.direct_ref_kind
         this.direct_install_button := this.install_button
 
         this.rppi_controls := [
@@ -293,9 +284,7 @@ class RimeDepotGui extends Gui {
         ]
         this.direct_controls := [
             this.direct_group, this.direct_source_label, this.direct_source_edit,
-            this.direct_ref_kind_label, this.direct_ref_kind, this.direct_ref_label,
-            this.direct_ref_edit, this.direct_recipe_label, this.direct_recipe_edit,
-            this.direct_recipe_hint
+            this.direct_ref_label, this.direct_ref_edit, this.direct_hint
         ]
 
         this.status_text := this.AddText("x22 y692 w700 h22 cGray", "Ready.")
@@ -654,6 +643,8 @@ class RimeDepotGui extends Gui {
         }
         entry := this.visible_entries[row]
         try {
+            this.ReadSettingsFromControls()
+            this.ApplyServiceSettings()
             this.operation_token += 1
             token := this.operation_token
             this.active_kind := "install"
@@ -662,8 +653,7 @@ class RimeDepotGui extends Gui {
             callbacks := this.CreateCallbacks(token, "install")
             this.callbacks := callbacks
             this.SetBusy(true)
-            this.active_job := this.service.InstallEntry(entry,
-                Map("UseGit", false, "Proxy", this.proxy_edit.Value), callbacks)
+            this.active_job := this.service.InstallEntry(entry, callbacks)
             if !IsObject(this.active_job) {
                 throw Error("The install operation did not return a RimeDepotJob.")
             }
@@ -680,8 +670,8 @@ class RimeDepotGui extends Gui {
     }
 
     InstallDirect(*) {
-        local source := Trim(this.direct_source_edit.Value), kind_index, kind, ref, recipe
-        local target, options, token, callbacks
+        local source := Trim(this.direct_source_edit.Value), ref := Trim(this.direct_ref_edit.Value)
+        local request, token, callbacks
         if this.disposed || this.busy {
             return false
         }
@@ -689,30 +679,15 @@ class RimeDepotGui extends Gui {
             this.SetStatus("Direct source is required.", true)
             return false
         }
-        kind_index := this.direct_ref_kind.Value
-        kind := ["default", "branch", "tag", "sha"][kind_index]
-        ref := Trim(this.direct_ref_edit.Value)
-        recipe := Trim(this.direct_recipe_edit.Value)
-        if kind = "default" && ref != "" {
-            this.SetStatus("Choose Branch, Tag, or Commit SHA before entering a ref.", true)
-            return false
-        }
-        if kind != "default" && ref = "" {
-            this.SetStatus("Enter a ref for the selected direct-install ref kind.", true)
-            return false
-        }
-        target := Map("repo", source, "ref_kind", kind)
-        if kind != "default" {
-            target["ref"] := ref
-        }
-        if recipe != "" {
-            target["recipe"] := recipe
-        }
+        request := Map(
+            "locator", source,
+            "ref", ref,
+            "transport", this.use_git_checkbox.Value ? "git" : "archive"
+        )
         try {
-            ; Construct once at the GUI boundary for friendly validation, but
-            ; pass the structured Map to the service so URL fields are not
-            ; routed through the legacy colon compact parser.
-            RimeDepotTarget(target)
+            RimeDepotDirectInstallRequest(request)
+            this.ReadSettingsFromControls()
+            this.ApplyServiceSettings()
             this.operation_token += 1
             token := this.operation_token
             this.active_kind := "install"
@@ -721,8 +696,7 @@ class RimeDepotGui extends Gui {
             callbacks := this.CreateCallbacks(token, "install")
             this.callbacks := callbacks
             this.SetBusy(true)
-            options := Map("UseGit", !!this.use_git_checkbox.Value, "Proxy", this.proxy_edit.Value)
-            this.active_job := this.service.InstallTarget(target, options, callbacks)
+            this.active_job := this.service.InstallDirect(request, callbacks)
             if !IsObject(this.active_job) {
                 throw Error("The direct install operation did not return a RimeDepotJob.")
             }

@@ -115,7 +115,7 @@ class RimeDepotRecipe {
     }
 
     Validate() {
-        if this.Rx != "" && (!RimeDepotUtil.IsSafeKey(this.Rx)
+        if this.Rx != "" && (!RimeDepotRecipe.IsSafeRecipeId(this.Rx)
             || !RimeDepotRecipe.IsSafeText(this.Rx, false)) {
             throw RimeDepotUnsupportedError("Recipe Rx contains unsafe expression syntax.")
         }
@@ -143,6 +143,10 @@ class RimeDepotRecipe {
             RimeDepotRecipe.SerializePatch(patch)
         }
         return this
+    }
+
+    static IsSafeRecipeId(value) {
+        return value != "" && value ~= "i)^[a-z_][a-z0-9_.-]*(?:/[a-z_][a-z0-9_.-]*)*$"
     }
 
     /** Start asynchronous recipe downloads and staged file operations. */

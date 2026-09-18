@@ -23,8 +23,8 @@ try {
 RimeDepotCoreProbeMain() {
     RimeDepotCoreProbeTest("JSON", RimeDepotCoreProbeJson.Bind())
     RimeDepotCoreProbeTest("YAML", RimeDepotCoreProbeYaml.Bind())
-    RimeDepotCoreProbeTest("target and security", RimeDepotCoreProbeTarget.Bind())
-    RimeDepotCoreProbeTest("structured targets and archive URLs", RimeDepotCoreProbeTargetMatrix.Bind())
+    RimeDepotCoreProbeTest("direct request and security", RimeDepotCoreProbeTarget.Bind())
+    RimeDepotCoreProbeTest("GitHub locator matrix", RimeDepotCoreProbeTargetMatrix.Bind())
     RimeDepotCoreProbeTest("safe relative paths and ZIP names", RimeDepotCoreProbeSafeRelativePaths.Bind())
     RimeDepotCoreProbeTest("short and long path containment", RimeDepotCoreProbePathAliases.Bind())
     RimeDepotCoreProbeTest("config precedence", RimeDepotCoreProbeConfig.Bind())
@@ -39,13 +39,14 @@ RimeDepotCoreProbeMain() {
     RimeDepotCoreProbeTest("git SHA command plan", RimeDepotCoreProbeGitSha.Bind())
     RimeDepotCoreProbeTest("local git --version process", RimeDepotCoreProbeGitVersion.Bind())
     RimeDepotCoreProbeTest("recipe safety", RimeDepotCoreProbeRecipe.Bind())
+    RimeDepotCoreProbeTest("direct recipe selection", RimeDepotCoreProbeDirectRecipeSelection.Bind())
     RimeDepotCoreProbeTest("recipe apply", RimeDepotCoreProbeRecipeApply.Bind())
     RimeDepotCoreProbeTest("recipe patch insertion", RimeDepotCoreProbePatchInsertion.Bind())
     RimeDepotCoreProbeTest("non-recursive file selection", RimeDepotCoreProbeNonRecursiveFiles.Bind())
-    RimeDepotCoreProbeTest("direct owner/repository InstallTarget", RimeDepotCoreProbeInstallTarget.Bind())
-    RimeDepotCoreProbeTest("direct target URL/ref contract", RimeDepotCoreProbeDirectTargetContract.Bind())
+    RimeDepotCoreProbeTest("direct owner/repository InstallDirect", RimeDepotCoreProbeInstallDirect.Bind())
+    RimeDepotCoreProbeTest("direct request URL/ref contract", RimeDepotCoreProbeDirectTargetContract.Bind())
     RimeDepotCoreProbeTest("catalog installs remain archive-only", RimeDepotCoreProbeCatalogArchiveOnly.Bind())
-    RimeDepotCoreProbeTest("catalog target ref overrides preserve source", RimeDepotCoreProbeCatalogTargetOverrides.Bind())
+    RimeDepotCoreProbeTest("catalog and direct sources stay separate", RimeDepotCoreProbeCatalogTargetOverrides.Bind())
     RimeDepotCoreProbeTest("archive ref URL matrix", RimeDepotCoreProbeArchiveUrls.Bind())
     RimeDepotCoreProbeTest("archive async and cancellation", RimeDepotCoreProbeArchive.Bind())
     RimeDepotCoreProbeTest("archive binary type guard", RimeDepotCoreProbeArchiveBinaryGuard.Bind())
@@ -84,12 +85,21 @@ RimeDepotCoreProbeYaml() {
 }
 
 RimeDepotCoreProbeTarget() {
-    target := RimeDepotTarget.Parse("owner/repo@v1:basic:mode=fast")
-    RimeDepotCoreProbeAssert(target.Name = "owner/repo", "Target name was not parsed.")
-    RimeDepotCoreProbeAssert(target.Ref = "v1" && target.Recipe = "basic", "Target ref or recipe was not parsed.")
-    RimeDepotCoreProbeAssert(target.Parameters["mode"] = "fast", "Target parameter was not parsed.")
-    RimeDepotCoreProbeThrows(RimeDepotTargetError, RimeDepotTarget.Parse.Bind("owner/repo:bad:1unsafe=x"),
-        "Unsafe target parameter was accepted.")
+    local request := RimeDepotDirectInstallRequest(Map(
+        "locator", "owner/repo",
+        "ref", "v1",
+        "recipe_path", "plum/full.recipe.yaml",
+        "parameters", Map("mode", "fast")
+    ))
+    RimeDepotCoreProbeAssert(request.Repository = "owner/repo" && request.Ref = "v1"
+        && request.RefKind = "auto" && request.RecipePath = "plum/full.recipe.yaml",
+        "Direct request fields were not normalized.")
+    RimeDepotCoreProbeAssert(request.Parameters["mode"] = "fast", "Direct recipe parameters were not retained.")
+    RimeDepotCoreProbeThrows(RimeDepotSecurityError,
+        (*) => RimeDepotDirectInstallRequest(Map(
+            "locator", "owner/repo", "recipe_path", "../bad.recipe.yaml"
+        )),
+        "Unsafe direct recipe path was accepted.")
     RimeDepotCoreProbeThrows(RimeDepotSecurityError, RimeDepotUtil.SafeRelativePath.Bind("..\\escape"),
         "Parent path was accepted.")
 }
@@ -97,6 +107,39 @@ RimeDepotCoreProbeTarget() {
 RimeDepotCoreProbeTargetMatrix() {
     local parameters := Map("mode", "fast"), target, zip_target, ssh_target, git_target, entry, values
     local sha_entry, branch_entry, archive_variant, archive_target, invalid_ref_target
+    local blob, raw, tree, repository, slash_ref
+    blob := RimeDepotDirectInstallRequest(
+        "https://github.com/amzxyz/rime-wanxiang/blob/wanxiang-base/plum/full.recipe.yaml"
+    )
+    raw := RimeDepotDirectInstallRequest(
+        "https://raw.githubusercontent.com/amzxyz/rime-wanxiang/refs/heads/wanxiang-base/plum/full.recipe.yaml"
+    )
+    RimeDepotCoreProbeAssert(blob.Repository = "amzxyz/rime-wanxiang" && blob.Ref = "wanxiang-base"
+        && blob.RefKind = "auto" && blob.RecipePath = "plum/full.recipe.yaml",
+        "GitHub blob recipe URL was not normalized.")
+    RimeDepotCoreProbeAssert(raw.Repository = blob.Repository && raw.Ref = blob.Ref
+        && raw.RefKind = "branch" && raw.RecipePath = blob.RecipePath,
+        "Raw GitHub recipe URL was not normalized.")
+    tree := RimeDepotDirectInstallRequest("https://github.com/amorphobia/rime-jiandao/tree/release")
+    repository := RimeDepotDirectInstallRequest("https://github.com/amorphobia/openfly")
+    RimeDepotCoreProbeAssert(tree.Repository = "amorphobia/rime-jiandao" && tree.Ref = "release"
+        && tree.RefKind = "auto" && tree.RecipePath = "",
+        "GitHub tree URL was not normalized.")
+    RimeDepotCoreProbeAssert(repository.Repository = "amorphobia/openfly"
+        && repository.Ref = "" && repository.RefKind = "default",
+        "GitHub repository URL was not normalized.")
+    RimeDepotCoreProbeThrows(RimeDepotTargetError,
+        (*) => RimeDepotDirectInstallRequest(Map(
+            "locator", "https://downloads.example.invalid/package.zip",
+            "ref", "release"
+        )),
+        "An explicit archive URL accepted a ref that it cannot use.")
+    slash_ref := RimeDepotDirectInstallRequest(Map(
+        "locator", "https://github.com/owner/repository/blob/feature/test/plum/full.recipe.yaml",
+        "ref", "feature/test"
+    ))
+    RimeDepotCoreProbeAssert(slash_ref.Ref = "feature/test" && slash_ref.RecipePath = "plum/full.recipe.yaml",
+        "An explicit slash-containing ref did not disambiguate a recipe URL.")
     target := RimeDepotTarget(Map(
         "repo", "https://github.com/owner/repository",
         "ref_kind", "tag",
@@ -892,6 +935,50 @@ RimeDepotCoreProbeRecipe() {
     RimeDepotCoreProbeAssert(plum_recipe.InstallFiles.Length = 5, "Plum folded install list was not split.")
 }
 
+RimeDepotCoreProbeDirectRecipeSelection() {
+    local root := RimeDepotUtil.NormalizePath(A_Temp . "\RimeDepotCoreProbe-direct-recipe-" . A_TickCount)
+    local nested := RimeDepotUtil.JoinPath(root, "plum"), path, config, installer, request, operation, recipe
+    local entry := RimeDepotCatalogEntry(Map("id", "demo", "repo", "owner/demo"), "demo")
+    try {
+        RimeDepotUtil.EnsureDirectory(nested)
+        path := RimeDepotUtil.JoinPath(nested, "full.recipe.yaml")
+        FileAppend("recipe:`n  Rx: plum/full`ninstall_files: demo.yaml`n", path, "UTF-8")
+        config := RimeDepotConfig(Map("CachePath", root, "RimeDirectory", RimeDepotUtil.JoinPath(root, "rime")))
+        installer := RimeDepotInstaller(config, 0)
+        request := RimeDepotDirectInstallRequest(Map(
+            "locator", "owner/demo", "recipe_path", "plum/full.recipe.yaml"
+        ))
+        operation := RimeDepotInstallerOperation(
+            installer, "direct", request, RimeDepotCatalog(), Map(), RimeDepotJob("recipe-select"), 0
+        )
+        recipe := operation._SelectRecipe(entry, root)
+        RimeDepotCoreProbeAssert(recipe.Rx = "plum/full" && operation.SelectedRecipePath = "plum/full.recipe.yaml",
+            "An explicit nested recipe was not selected relative to the repository root.")
+
+        FileAppend("recipe:`n  Rx: demo`ninstall_files: demo.yaml`n",
+            RimeDepotUtil.JoinPath(root, "recipe.yaml"), "UTF-8")
+        request := RimeDepotDirectInstallRequest("owner/demo")
+        operation := RimeDepotInstallerOperation(
+            installer, "direct", request, RimeDepotCatalog(), Map(), RimeDepotJob("root-recipe"), 0
+        )
+        recipe := operation._SelectRecipe(entry, root)
+        RimeDepotCoreProbeAssert(recipe.Rx = "demo" && operation.SelectedRecipePath = "recipe.yaml",
+            "A repository install did not select its root recipe.yaml.")
+
+        FileDelete(RimeDepotUtil.JoinPath(root, "recipe.yaml"))
+        FileAppend("recipe:`n  Rx: nested`n", RimeDepotUtil.JoinPath(nested, "recipe.yaml"), "UTF-8")
+        operation := RimeDepotInstallerOperation(
+            installer, "direct", request, RimeDepotCatalog(), Map(), RimeDepotJob("no-recursion"), 0
+        )
+        RimeDepotCoreProbeAssert(!operation._SelectRecipe(entry, root),
+            "An unspecified recipe recursively discovered a nested recipe.yaml.")
+    } finally {
+        if DirExist(root) {
+            RimeDepotUtil.DeleteTree(root)
+        }
+    }
+}
+
 RimeDepotCoreProbeRecipeApply() {
     local root, source_root, destination_root, url, fixture, recipe, transport, client, job, outcome, operation
     local installed_path, patch_path, installed_text, patch_text
@@ -983,7 +1070,7 @@ RimeDepotCoreProbeNonRecursiveFiles() {
         config := RimeDepotConfig(Map("CachePath", root, "RimeDirectory", RimeDepotUtil.JoinPath(root, "rime")))
         installer := RimeDepotInstaller(config, 0)
         job := RimeDepotJob("default-files")
-        operation := RimeDepotInstallerOperation(installer, 0, 0, Map(), job, 0)
+        operation := RimeDepotInstallerOperation(installer, "catalog", 0, 0, Map(), job, 0)
         RimeDepotUtil.EnsureDirectory(destination_root)
         package_alias := RimeDepotCoreProbeShortPath(RimeDepotUtil.CanonicalPath(package_root))
         destination_alias := RimeDepotCoreProbeShortPath(RimeDepotUtil.CanonicalPath(destination_root))
@@ -1005,7 +1092,7 @@ RimeDepotCoreProbeNonRecursiveFiles() {
     }
 }
 
-RimeDepotCoreProbeInstallTarget() {
+RimeDepotCoreProbeInstallDirect() {
     local root, cache_path, rime_path, service, job, error_text
     root := RimeDepotUtil.NormalizePath(A_Temp . "\\RimeDepotCoreProbe-direct-install-" . A_TickCount)
     cache_path := RimeDepotUtil.JoinPath(root, "cache")
@@ -1016,17 +1103,17 @@ RimeDepotCoreProbeInstallTarget() {
             "RimeDirectory", rime_path,
             "RppiIndexUrl", "https://example.invalid/index.json"
         ), "", Map("Http", RimeDepotCoreProbeTransport(Map())))
-        job := service.InstallTarget("owner/repository", Map("UseGit", false))
-        RimeDepotCoreProbeAssert(job is RimeDepotJob && job.Kind = "install",
-            "Direct InstallTarget did not create an installation job.")
-        RimeDepotCoreProbeAssert(service.Catalog is RimeDepotCatalog && service.Catalog.ToArray().Length = 1,
-            "Direct InstallTarget did not create a temporary catalog entry.")
+        job := service.InstallDirect(Map("locator", "owner/repository", "transport", "archive"))
+        RimeDepotCoreProbeAssert(job is RimeDepotJob && job.Kind = "install-direct",
+            "Direct InstallDirect did not create an installation job.")
+        RimeDepotCoreProbeAssert(!service.Catalog,
+            "Direct InstallDirect unexpectedly mutated the RPPI catalog.")
         RimeDepotCoreProbeAssert(job.Status = "running" && !job.Error,
-            "Direct InstallTarget failed before its asynchronous job was built.")
-        RimeDepotCoreProbeAssert(job.Cancel(), "Direct InstallTarget job could not be cancelled.")
+            "Direct InstallDirect failed before its asynchronous job was built.")
+        RimeDepotCoreProbeAssert(job.Cancel(), "Direct InstallDirect job could not be cancelled.")
         error_text := job.Error ? job.Error.Message : ""
         RimeDepotCoreProbeAssert(job.Status = "cancelled",
-            "Direct InstallTarget cancellation was not observed (status=" . job.Status . ", error=" . error_text . ").")
+            "Direct InstallDirect cancellation was not observed (status=" . job.Status . ", error=" . error_text . ").")
         Sleep(100)
     } finally {
         if DirExist(root) {
@@ -1051,18 +1138,8 @@ RimeDepotCoreProbeDirectTargetContract() {
             "RimeDirectory", rime_path,
             "RppiIndexUrl", "https://example.invalid/index.json"
         ), "", Map("Http", RimeDepotCoreProbeTransport(Map())))
-        target := Map(
-            "repo", "https://downloads.example.invalid/openfly.zip",
-            "ref_kind", "tag",
-            "ref", "v1",
-            "recipe", "custom",
-            "parameters", Map("mode", "fast")
-        )
-        job := service.InstallTarget(target, Map("UseGit", false))
-        entry := service.Catalog.Resolve("https://downloads.example.invalid/openfly.zip")
-        RimeDepotCoreProbeAssert(entry.Repo = target["repo"] && entry.ArchiveUrl = target["repo"]
-            && entry.Tag = "v1" && entry.RefKind = "tag" && entry.Recipe = "custom",
-            "Direct target metadata was not copied to the temporary catalog entry.")
+        target := Map("locator", "https://downloads.example.invalid/openfly.zip", "transport", "archive")
+        job := service.InstallDirect(target)
         RimeDepotCoreProbeAssert(job is RimeDepotJob && job.Cancel(),
             "Direct archive target could not be cancelled.")
 
@@ -1073,13 +1150,11 @@ RimeDepotCoreProbeDirectTargetContract() {
             "RimeDirectory", git_rime,
             "RppiIndexUrl", "https://example.invalid/index.json"
         ), "", Map("Http", RimeDepotCoreProbeTransport(Map()), "GitRunner", git_runner))
-        git_job := git_service.InstallTarget(Map(
-            "repo", "owner/direct",
-            "ref_kind", "branch",
+        git_job := git_service.InstallDirect(Map(
+            "locator", "owner/direct",
             "ref", "feature/direct",
-            "recipe", "custom",
-            "parameters", Map("mode", "fast")
-        ), Map("UseGit", true))
+            "transport", "git"
+        ))
         Sleep(100)
         RimeDepotCoreProbeAssert(launcher.Commands.Length >= 1,
             "Direct UseGit=true did not create a Git operation.")
@@ -1121,10 +1196,10 @@ RimeDepotCoreProbeCatalogArchiveOnly() {
         entry := catalog.Add(Map("id", "demo", "name", "Demo", "repo", "owner/demo"), "demo")
         entry.Dependencies := [dependency.Id]
         service.Catalog := catalog
-        job := service.InstallTarget(entry, Map("UseGit", true))
+        job := service.InstallEntry(entry)
         Sleep(100)
         RimeDepotCoreProbeAssert(job is RimeDepotJob,
-            "CatalogEntry InstallTarget did not return a RimeDepotJob.")
+            "InstallEntry did not return a RimeDepotJob.")
         calls := transport.Calls
         RimeDepotCoreProbeAssert(calls.Length >= 1
             && calls[1] = "https://github.com/owner/base/archive/HEAD.zip",
@@ -1165,23 +1240,24 @@ RimeDepotCoreProbeCatalogTargetOverrides() {
 
         ; A bare catalog id must retain the catalog's branch/ref when no
         ; explicit target ref was supplied.
-        job := service.InstallTarget("Openfly", Map("UseGit", false))
+        job := service.InstallEntry("Openfly")
         Sleep(100)
         calls := transport.Calls
         RimeDepotCoreProbeAssert(calls.Length >= 1
             && calls[1] = "https://github.com/owner/openfly/archive/refs/heads/catalog-main.zip",
             "A bare catalog target cleared the catalog branch/ref.")
 
-        ; The package id resolves to the catalog entry, while the compact ref
-        ; remains a direct target override.  Its parsed Repo is not an
-        ; explicitly supplied source and must not replace owner/openfly.
-        job := service.InstallTarget("Openfly@feature/direct", Map("UseGit", false))
+        job := service.InstallDirect(Map(
+            "locator", "owner/openfly",
+            "ref", "feature/direct",
+            "transport", "archive"
+        ))
         Sleep(100)
         calls := transport.Calls
         RimeDepotCoreProbeAssert(calls.Length >= 2,
-            "A catalog target override did not reach the archive transport.")
-        RimeDepotCoreProbeAssert(calls[2] = "https://github.com/owner/openfly/archive/refs/heads/feature%2Fdirect.zip",
-            "A catalog target override replaced the catalog repository with its package id.")
+            "A direct source did not reach the archive transport.")
+        RimeDepotCoreProbeAssert(calls[2] = "https://github.com/owner/openfly/archive/feature%2Fdirect.zip",
+            "The direct source did not retain its repository/ref fields.")
         RimeDepotCoreProbeAssert(job.Status = "failed" || job.Status = "cancelled",
             "The catalog target archive fixture did not reach its expected HTTP failure path.")
     } finally {
@@ -1222,6 +1298,7 @@ RimeDepotCoreProbeArchive() {
     local root, staging_root, archive_body, leaf, zip_child, zip_folder, zip_namespace, destination_namespace
     local shell, transport, job, outcome, operation, start_time, cancel_root, cancel_staging, cancel_destination
     local cancel_shell, cancel_transport, cancel_job, cancel_outcome, cancel_operation
+    local proxy := "http://localhost:7890"
     root := A_Temp . "\\RimeDepotCoreProbe-archive-" . A_TickCount
     staging_root := root . "\\staging"
     cancel_root := root . "\\cancel"
@@ -1243,9 +1320,12 @@ RimeDepotCoreProbeArchive() {
             "Archive namespace counting did not recurse into nested folders.")
         start_time := A_TickCount
         operation := RimeDepotArchive.DownloadAndExtractAsync(transport, "https://example.invalid/archive.zip",
-            staging_root, job, ObjBindMethod(outcome, "Archive"), "", ObjBindMethod(shell, "Open"))
+            staging_root, job, ObjBindMethod(outcome, "Archive"), proxy, ObjBindMethod(shell, "Open"))
         RimeDepotCoreProbeAssert(A_TickCount - start_time < 500,
             "Archive Start blocked while scheduling extraction.")
+        RimeDepotCoreProbeAssert(transport.Options["Proxy"] = proxy
+            && transport.Options["Timeout"] = RimeDepotArchive.DOWNLOAD_TIMEOUT_MS,
+            "Archive download did not forward its proxy and extended timeout.")
         RimeDepotCoreProbeAssert(!outcome.Done, "Archive completion happened synchronously on Start.")
         RimeDepotCoreProbeWaitSignal(outcome, 3000)
         RimeDepotCoreProbeAssert(outcome.Success, "Archive async extraction fixture failed.")
@@ -1803,9 +1883,11 @@ class RimeDepotCoreProbeFakeProcess {
 class RimeDepotCoreProbeArchiveTransport {
     __New(body) {
         this.Body := body
+        this.Options := 0
     }
 
     GetAsync(url, callback, options := 0, job := 0) {
+        this.Options := options
         request := RimeDepotCoreProbeArchiveRequest(callback,
             RimeDepotHttpResponse(url, 200, this.Body, Map()))
         return request.Start()
